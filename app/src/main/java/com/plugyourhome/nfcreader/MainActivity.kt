@@ -1,5 +1,6 @@
 package com.plugyourhome.nfcreader
 
+import android.app.Application
 import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -12,19 +13,51 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 
 enum class NfcStatus { READY, DISABLED, UNSUPPORTED }
 
-class ScanViewModel : ViewModel() {
+class ScanViewModel(app: Application) : AndroidViewModel(app) {
+    private val store = CodeStore(app)
+
     val status = mutableStateOf(NfcStatus.READY)
     val history = mutableStateListOf<TagScan>()   // newest first, kept for the session
+
+    // Saved codes (persisted) + emission settings
+    val codes = mutableStateListOf<SavedCode>().apply { addAll(store.load()) }
+    val activeId = mutableStateOf(store.activeId)
+    val emitEnabled = mutableStateOf(store.emitEnabled)
 
     fun add(scan: TagScan) {
         history.add(0, scan)
         if (history.size > 50) history.removeAt(history.lastIndex)
     }
     fun clear() = history.clear()
+
+    private fun persist() = store.save(codes.toList())
+
+    fun saveCode(name: String, value: String, source: String) {
+        val trimmed = value.take(CodeStore.MAX_LEN)
+        val code = SavedCode(System.currentTimeMillis(), name.ifBlank { "Code ${codes.size + 1}" }, trimmed, source)
+        codes.add(0, code)
+        persist()
+        if (codes.size == 1) setActive(code.id)   // first code becomes active automatically
+    }
+
+    fun rename(id: Long, name: String) {
+        val i = codes.indexOfFirst { it.id == id }
+        if (i >= 0) { codes[i] = codes[i].copy(name = name); persist() }
+    }
+
+    fun delete(id: Long) {
+        codes.removeAll { it.id == id }
+        persist()
+        if (activeId.value == id) setActive(codes.firstOrNull()?.id ?: -1L)
+    }
+
+    fun setActive(id: Long) { activeId.value = id; store.activeId = id }
+
+    fun setEmit(on: Boolean) { emitEnabled.value = on; store.emitEnabled = on }
 }
 
 class MainActivity : ComponentActivity() {

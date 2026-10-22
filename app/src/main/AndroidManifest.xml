@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.NFC" />
     <!-- required=false so the app still installs on phones without NFC (shows a message instead) -->
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -28,5 +29,18 @@
                 android:name="android.nfc.action.TECH_DISCOVERED"
                 android:resource="@xml/nfc_tech_filter" />
         </activity>
+
+        <!-- Phone-as-card: answers your own alarm reader with the active saved code -->
+        <service
+            android:name=".EmitService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/apduservice" />
+        </service>
     </application>
 </manifest>

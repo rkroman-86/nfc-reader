@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">NFC Reader</string>
+    <string name="hce_desc">plug-your-home alarm badge</string>
 </resources>

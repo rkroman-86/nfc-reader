@@ -13,10 +13,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -56,16 +61,15 @@ fun NfcReaderTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(vm: ScanViewModel, onOpenNfcSettings: () -> Unit) {
-    val status by vm.status
-    val history = vm.history
     val snackbar = remember { SnackbarHostState() }
+    var tab by rememberSaveable { mutableStateOf(0) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("NFC Reader", fontWeight = FontWeight.SemiBold) },
                 actions = {
-                    if (history.isNotEmpty()) IconButton(onClick = vm::clear) {
+                    if (tab == 0 && vm.history.isNotEmpty()) IconButton(onClick = vm::clear) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear history")
                     }
                 },
@@ -73,15 +77,38 @@ fun MainScreen(vm: ScanViewModel, onOpenNfcSettings: () -> Unit) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(pad),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { StatusCard(status, hasScans = history.isNotEmpty(), onOpenNfcSettings) }
-            items(history, key = { it.timestamp }) { scan ->
-                ScanCard(scan, latest = scan === history.firstOrNull(), snackbar)
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            TabRow(selectedTabIndex = tab) {
+                Tab(tab == 0, onClick = { tab = 0 }, text = { Text("Reader") })
+                Tab(tab == 1, onClick = { tab = 1 }, text = { Text("Codes") })
             }
+            when (tab) {
+                0 -> ReaderTab(vm, snackbar, onSaved = { tab = 1 }, onOpenNfcSettings)
+                else -> CodesTab(vm, snackbar)
+            }
+        }
+    }
+}
+
+// ───────────────────────── Reader tab ─────────────────────────
+
+@Composable
+private fun ReaderTab(
+    vm: ScanViewModel,
+    snackbar: SnackbarHostState,
+    onSaved: () -> Unit,
+    onOpenNfcSettings: () -> Unit,
+) {
+    val status by vm.status
+    val history = vm.history
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { StatusCard(status, hasScans = history.isNotEmpty(), onOpenNfcSettings) }
+        items(history, key = { it.timestamp }) { scan ->
+            ScanCard(scan, latest = scan === history.firstOrNull(), snackbar, vm, onSaved)
         }
     }
 }
@@ -125,7 +152,13 @@ private fun StatusCard(status: NfcStatus, hasScans: Boolean, onOpenNfcSettings: 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ScanCard(scan: TagScan, latest: Boolean, snackbar: SnackbarHostState) {
+private fun ScanCard(
+    scan: TagScan,
+    latest: Boolean,
+    snackbar: SnackbarHostState,
+    vm: ScanViewModel,
+    onSaved: () -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -134,6 +167,11 @@ private fun ScanCard(scan: TagScan, latest: Boolean, snackbar: SnackbarHostState
     fun copy(label: String, text: String) {
         clipboard.setText(AnnotatedString(text))
         scope.launch { snackbar.showSnackbar("$label copied") }
+    }
+    fun save(name: String, value: String, source: String) {
+        vm.saveCode(name, value, source)
+        scope.launch { snackbar.showSnackbar("Saved to Codes") }
+        onSaved()
     }
 
     Card(
@@ -160,6 +198,12 @@ private fun ScanCard(scan: TagScan, latest: Boolean, snackbar: SnackbarHostState
             SelectionContainer {
                 Text(scan.uid, fontFamily = FontFamily.Monospace, fontSize = 17.sp, color = Teal)
             }
+            Spacer(Modifier.height(8.dp))
+            AssistChip(
+                onClick = { save("UID ${scan.uid.take(8)}", scan.uid, "UID") },
+                label = { Text("Save UID as code") },
+                leadingIcon = { Icon(Icons.Default.Save, null, Modifier.size(18.dp)) },
+            )
 
             if (expanded) {
                 Spacer(Modifier.height(12.dp))
@@ -194,6 +238,7 @@ private fun ScanCard(scan: TagScan, latest: Boolean, snackbar: SnackbarHostState
                                 SelectionContainer { Text(r.content, style = MaterialTheme.typography.bodyMedium) }
                                 Row {
                                     TextButton(onClick = { copy("Record", r.content) }) { Text("Copy") }
+                                    TextButton(onClick = { save(r.type, r.content, r.type) }) { Text("Save") }
                                     if (r.isLink) TextButton(onClick = {
                                         runCatching {
                                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.content)))
@@ -214,6 +259,177 @@ private fun ScanCard(scan: TagScan, latest: Boolean, snackbar: SnackbarHostState
             }
         }
     }
+}
+
+// ───────────────────────── Codes tab ─────────────────────────
+
+@Composable
+private fun CodesTab(vm: ScanViewModel, snackbar: SnackbarHostState) {
+    val codes = vm.codes
+    val activeId by vm.activeId
+    val emit by vm.emitEnabled
+    var showAdd by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<SavedCode?>(null) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { EmitCard(emit, codes.firstOrNull { it.id == activeId }, onToggle = vm::setEmit) }
+
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Saved codes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                FilledTonalButton(onClick = { showAdd = true }) {
+                    Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Add")
+                }
+            }
+        }
+
+        if (codes.isEmpty()) item {
+            Text(
+                "No codes yet. Scan a tag and tap “Save”, or add one by hand.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        items(codes, key = { it.id }) { code ->
+            CodeRow(
+                code = code,
+                active = code.id == activeId,
+                onSelect = { vm.setActive(code.id) },
+                onEdit = { editing = code },
+                onDelete = { vm.delete(code.id) },
+            )
+        }
+    }
+
+    if (showAdd) NameValueDialog(
+        title = "Add code",
+        initialName = "",
+        initialValue = "",
+        onDismiss = { showAdd = false },
+        onConfirm = { n, v -> vm.saveCode(n, v, "Manual"); showAdd = false },
+    )
+    editing?.let { e ->
+        NameValueDialog(
+            title = "Rename",
+            initialName = e.name,
+            initialValue = e.value,
+            valueEditable = false,
+            onDismiss = { editing = null },
+            onConfirm = { n, _ -> vm.rename(e.id, n); editing = null },
+        )
+    }
+}
+
+@Composable
+private fun EmitCard(emit: Boolean, active: SavedCode?, onToggle: (Boolean) -> Unit) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (emit) Teal.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Wifi, null, tint = if (emit) Teal else MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Emit to reader", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (active != null) "Active: ${active.name}" else "No code selected",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = emit && active != null, enabled = active != null, onCheckedChange = onToggle)
+            }
+            if (emit && active != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Unlock the phone and hold it against your reader. It answers the PYHOME badge request with this code.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeRow(
+    code: SavedCode,
+    active: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        onClick = onSelect,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (active) Teal.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface,
+        ),
+        border = if (active) null else CardDefaults.outlinedCardBorder(),
+    ) {
+        Row(Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = active, onClick = onSelect)
+            Column(Modifier.weight(1f)) {
+                Text(code.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    code.value,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (active) Teal else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                Text(code.source, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Rename", Modifier.size(20.dp)) }
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", Modifier.size(20.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun NameValueDialog(
+    title: String,
+    initialName: String,
+    initialValue: String,
+    valueEditable: Boolean = true,
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, value: String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName) }
+    var value by remember { mutableStateOf(initialValue) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
+                if (valueEditable) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value, { value = it.take(CodeStore.MAX_LEN) },
+                        label = { Text("Code / value") },
+                        supportingText = { Text("UID hex, text, or any string your reader expects") },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name, value) },
+                enabled = name.isNotBlank() && (!valueEditable || value.isNotBlank()),
+            ) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

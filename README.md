@@ -21,7 +21,41 @@ and can also be launched by scanning a tag while it's closed.
 
 Package: `com.plugyourhome.nfcreader` · minSdk 26 · targetSdk 35.
 
+## Phone-as-badge (HCE) — for your own alarm
+
+The **Codes** tab lets you save a value (scanned UID, NDEF text, or typed by hand),
+pick one as *active*, and turn on **Emit to reader**. The phone then behaves as a
+card: when *your* reader selects the app's AID, the phone returns the active code.
+
+Important: this is **not** cloning a tag's UID. Android generates the UID in the
+NFC controller and won't let an app forge it, so a real badge cannot be replayed.
+Instead you define a shared value and recognise it on a reader *you* own — a proper
+challenge you control on both ends. It's meant for your own system, not for
+presenting someone else's credential.
+
+- **AID:** `F0 50 59 48 4F 4D 45 01` ("PYHOME" + 01) — a custom, non-registered AID.
+- **SELECT (reader → phone):** `00 A4 04 00 08 F0 50 59 48 4F 4D 45 01 00`
+- **Response (phone → reader):** `<code bytes, UTF-8> 90 00`, or `6A 82` if emit is off.
+- The phone must be **unlocked** (`requireDeviceUnlock="true"`).
+
+### Reader side (ESP32 + PN532)
+```cpp
+// after inListPassiveTarget() detects the phone:
+uint8_t sel[] = {0x00,0xA4,0x04,0x00,0x08, 0xF0,0x50,0x59,0x48,0x4F,0x4D,0x45,0x01, 0x00};
+uint8_t resp[64]; uint8_t rlen = sizeof(resp);
+if (nfc.inDataExchange(sel, sizeof(sel), resp, &rlen) && rlen >= 2 &&
+    resp[rlen-2] == 0x90 && resp[rlen-1] == 0x00) {
+    String code = "";
+    for (int i = 0; i < rlen - 2; i++) code += (char)resp[i];
+    if (code == MY_SECRET) toggleAlarm();   // arm / disarm
+}
+```
+For real security, don't send a static string: have the reader send a random
+nonce and the phone return HMAC(nonce, key). The current build sends the stored
+value as-is, which is fine for a bench test.
+
 ## Not included (yet)
 - Writing tags
 - Reading protected MIFARE Classic sectors (needs keys)
-- Persisting history across app restarts
+- Persisting scan history across app restarts (saved codes *are* persisted)
+- Challenge-response / HMAC (the emit path sends the code verbatim for now)
