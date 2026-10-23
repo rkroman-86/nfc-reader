@@ -29,7 +29,15 @@ jobs:
         run: yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          if ! gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log; then
+            echo "===== extracted errors ====="
+            grep -nE "^e: |error:|> Task .* FAILED|What went wrong|Caused by:|Could not|> " build.log | head -120
+            grep -E "^e: |error:|Could not|Caused by:|What went wrong" build.log | head -40 \
+              | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk NfcReader.apk
