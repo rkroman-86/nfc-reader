@@ -38,6 +38,15 @@ presenting someone else's credential.
 - **Response (phone → reader):** `<code bytes, UTF-8> 90 00`, or `6A 82` if emit is off.
 - The phone must be **unlocked** (`requireDeviceUnlock="true"`).
 
+### Test it with two phones (no hardware)
+1. Phone A → **Codes** tab → create/select a code → turn on **Emit to reader**. Keep it unlocked.
+2. Phone B → **Reader** tab → turn on **Read virtual card**.
+3. Hold the two phones back-to-back. Phone B sends the SELECT above and shows the code.
+
+Note: a phone **cannot** replay a scanned card's UID — Android fixes the UID in the
+NFC controller. Reading a card and emitting a card are two separate channels: you read
+UIDs/NDEF, and you emit a *code* over the PYHOME app, not a UID.
+
 ### Reader side (ESP32 + PN532)
 ```cpp
 // after inListPassiveTarget() detects the phone:

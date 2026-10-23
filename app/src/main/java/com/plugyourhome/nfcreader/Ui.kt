@@ -107,6 +107,7 @@ private fun ReaderTab(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { StatusCard(status, hasScans = history.isNotEmpty(), onOpenNfcSettings) }
+        item { VirtualReadCard(vm, snackbar) }
         items(history, key = { it.timestamp }) { scan ->
             ScanCard(scan, latest = scan === history.firstOrNull(), snackbar, vm, onSaved)
         }
@@ -145,6 +146,58 @@ private fun StatusCard(status: NfcStatus, hasScans: Boolean, onOpenNfcSettings: 
                 NfcStatus.UNSUPPORTED -> Text(
                     "This device has no NFC hardware", style = MaterialTheme.typography.titleMedium,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VirtualReadCard(vm: ScanViewModel, snackbar: SnackbarHostState) {
+    val on by vm.virtualMode
+    val result by vm.virtualResult
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (on) Teal.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Read virtual card", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Query a phone in Emit mode for its PYHOME code",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = on, onCheckedChange = { vm.virtualMode.value = it; vm.virtualResult.value = null })
+            }
+            if (on) {
+                Spacer(Modifier.height(8.dp))
+                val r = result
+                when {
+                    r == null -> Text(
+                        "Hold the other (unlocked) phone against this one…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    r.ok -> {
+                        Label("Code received")
+                        SelectionContainer {
+                            Text(r.code ?: "", fontFamily = FontFamily.Monospace, fontSize = 16.sp, color = Teal)
+                        }
+                        TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(r.code ?: ""))
+                            scope.launch { snackbar.showSnackbar("Code copied") }
+                        }) { Text("Copy") }
+                    }
+                    else -> Text(r.message, style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }

@@ -31,6 +31,14 @@ data class TagScan(
     val records: List<NdefRecordInfo>,
 )
 
+/** Result of actively reading a phone emitting our PYHOME virtual card. */
+data class VirtualReadResult(
+    val ok: Boolean,
+    val code: String?,
+    val message: String,
+    val timestamp: Long = System.currentTimeMillis(),
+)
+
 object TagParser {
 
     fun parse(tag: Tag): TagScan {
@@ -101,6 +109,36 @@ object TagParser {
             details = details,
             records = records,
         )
+    }
+
+    // SELECT by AID for our custom card: 00 A4 04 00 08 F0 50 59 48 4F 4D 45 01 00
+    private val SELECT_PYHOME = byteArrayOf(
+        0x00, 0xA4.toByte(), 0x04, 0x00, 0x08,
+        0xF0.toByte(), 0x50, 0x59, 0x48, 0x4F, 0x4D, 0x45, 0x01, 0x00,
+    )
+
+    /** Actively talks to a phone (or card) exposing the PYHOME app and returns its code. */
+    fun readVirtualCard(tag: Tag): VirtualReadResult {
+        val iso = IsoDep.get(tag)
+            ?: return VirtualReadResult(false, null, "This tag isn't ISO-DEP — not a phone in Emit mode")
+        return try {
+            iso.connect()
+            val resp = iso.transceive(SELECT_PYHOME)
+            when {
+                resp.size >= 2 && resp[resp.size - 2] == 0x90.toByte() && resp[resp.size - 1] == 0x00.toByte() -> {
+                    val code = String(resp, 0, resp.size - 2, Charsets.UTF_8)
+                    VirtualReadResult(true, code, "Code received")
+                }
+                resp.size >= 2 && resp[resp.size - 2] == 0x6A.toByte() && resp[resp.size - 1] == 0x82.toByte() ->
+                    VirtualReadResult(false, null, "PYHOME app found but emission is off / no active code")
+                else ->
+                    VirtualReadResult(false, null, "No PYHOME app here (answered ${resp.toHex()})")
+            }
+        } catch (e: Exception) {
+            VirtualReadResult(false, null, "Read failed: ${e.message ?: "lost connection"}")
+        } finally {
+            try { iso.close() } catch (_: Exception) {}
+        }
     }
 
     private fun readNdef(ndef: Ndef): NdefMessage? = try {

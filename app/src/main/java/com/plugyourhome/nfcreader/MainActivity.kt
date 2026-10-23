@@ -23,6 +23,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     val status = mutableStateOf(NfcStatus.READY)
     val history = mutableStateListOf<TagScan>()   // newest first, kept for the session
 
+    // "Read virtual card" mode: actively query a phone emitting the PYHOME card
+    val virtualMode = mutableStateOf(false)
+    val virtualResult = mutableStateOf<VirtualReadResult?>(null)
+
     // Saved codes (persisted) + emission settings
     val codes = mutableStateListOf<SavedCode>().apply { addAll(store.load()) }
     val activeId = mutableStateOf(store.activeId)
@@ -120,8 +124,13 @@ class MainActivity : ComponentActivity() {
         tag?.let { onTag(it) }
     }
 
-    /** Called on a binder thread in reader mode — parse there, publish on the UI thread. */
+    /** Called on a binder thread in reader mode — talk to the tag there, publish on the UI thread. */
     private fun onTag(tag: Tag) {
+        if (vm.virtualMode.value) {
+            val result = TagParser.readVirtualCard(tag)
+            runOnUiThread { vm.virtualResult.value = result }
+            return
+        }
         val scan = try { TagParser.parse(tag) } catch (e: Exception) { null } ?: return
         runOnUiThread { vm.add(scan) }
     }
